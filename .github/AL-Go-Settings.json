@@ -1,5 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v8.3/.Modules/settings.schema.json",
   "type": "PTE",
-  "templateUrl": "https://github.com/microsoft/AL-Go-PTE@main"
+  "templateUrl": "https://github.com/SinclairSoftScotland/AL-Go-PTE@main",
+  "CICDPushBranches": [
+    "main",
+    "develop",
+    "release/*"
+  ],
+  "CICDPullRequestBranches": [
+    "main",
+    "develop",
+    "release/*"
+  ],
+  "pullRequestTrigger": "pull_request",
+  "githubRunner": "self-hosted, Windows, al-go",
+  "versioningStrategy": 3,
+  "workflowConcurrency": [
+    "group: ${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress: true"
+  ]
 }
