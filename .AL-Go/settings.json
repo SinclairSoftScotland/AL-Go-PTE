@@ -12,5 +12,21 @@
     "."
   ],
   "testFolders": [],
-  "bcptTestFolders": []
+  "bcptTestFolders": [],
+  "CICDPushBranches": [
+    "main",
+    "develop",
+    "release/*"
+  ],
+  "CICDPullRequestBranches": [
+    "main",
+    "develop",
+    "release/*"
+  ],
+  "pullRequestTrigger": "pull_request",
+  "githubRunner": "self-hosted, Windows, al-go",
+  "workflowConcurrency": [
+    "group: ${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress: true"
+  ]
 }
