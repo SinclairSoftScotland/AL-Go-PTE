@@ -24,9 +24,5 @@
     "release/*"
   ],
   "pullRequestTrigger": "pull_request",
-  "githubRunner": "self-hosted, Windows, al-go",
-  "workflowConcurrency": [
-    "group: ${{ github.workflow }}-${{ github.ref }}",
-    "cancel-in-progress: true"
-  ]
+  "githubRunner": "self-hosted, Windows, al-go"
 }
