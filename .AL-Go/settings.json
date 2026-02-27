@@ -24,5 +24,25 @@
     "release/*"
   ],
   "pullRequestTrigger": "pull_request",
-  "githubRunner": "self-hosted, Windows, al-go"
+  "githubRunner": "self-hosted, Windows, al-go",
+  "artifactCachePath": "C:\\bcartifacts.cache",
+  "cacheKeepDays": 30,
+  "doNotPublishApps": true,
+  "doNotRunTests": true,
+  "cacheImageName": "algo-cache",
+  "incrementalBuilds": {
+    "onPush": true,
+    "onPull_Request": true,
+    "retentionDays": 30,
+    "onSchedule": false,
+    "mode": "modifiedapps"
+  },
+  "alwaysBuildAllProjects": false,
+  "fullBuildPatterns": [],
+  "useProjectDependencies": true,
+  "useCompilerFolder": true,
+  "bcContainerHelperConfig": {
+    "artifactCachePath": "C:\\bcartifacts.cache",
+    "cacheKeepDays": 30
+  }
 }
