@@ -4,6 +4,11 @@
   "appFolders": [],
   "testFolders": [],
   "bcptTestFolders": [],
-  "CICDPushBranches": ["main","release/*"],
-  "CICDPullRequestBranches": ["main"]
+  "CICDPushBranches": [
+    "main",
+    "release/*"
+  ],
+  "CICDPullRequestBranches": [
+    "main"
+  ]
 }
