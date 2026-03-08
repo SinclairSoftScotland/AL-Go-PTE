@@ -5,8 +5,6 @@ on:
     branches:
       - main
     paths-ignore:
-      - 'app.json'        # avoid triggering on our own bump commit
-      - '**.md'
       - '.github/**'
       - '.AL-Go/**'
 
@@ -17,30 +15,41 @@ concurrency:
 jobs:
   increment-version:
     name: Increment Build Version
+    # skip entirely if this run was caused by our own bot commit
+    if: github.actor != 'github-actions[bot]' && github.actor != 'github-actions'
+
     runs-on: windows-latest
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          lfs: true
           token: ${{ secrets.ghTokenWorkflow }}
 
       - name: Increment build number in app.json
         shell: pwsh
         run: |
           $appJsonPath = "app.json"
+          if (-not (Test-Path $appJsonPath)) {
+            Write-Error "app.json not found"
+            exit 1
+          }
           $appJson = Get-Content $appJsonPath -Raw | ConvertFrom-Json
-          $current = [System.Version]$appJson.version
-          $newVersion = "{0}.{1}.{2}.0" -f $current.Major, $current.Minor, ($current.Build + 1)
+          $current = [Version]$appJson.version
+          $newBuild = $current.Build + 1
+          $newVersion = "$($current.Major).$($current.Minor).$newBuild.0"
           $appJson.version = $newVersion
           $appJson | ConvertTo-Json -Depth 10 | Set-Content $appJsonPath -Encoding UTF8
-          Write-Host "Version bumped: $current -> $newVersion"
-          echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
 
-      - name: Commit and push
+          echo "✅ Version bumped: $($current) -> $newVersion"
+          echo "✅ NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
+
+      - name: Commit and push version bump
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app.json
-          git commit -m "Increment build version to ${{ env.NEW_VERSION }}"
+          git commit -m "Increment build version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes to commit"
           git push
