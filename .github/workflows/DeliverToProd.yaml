@@ -1,7 +1,7 @@
-run-name: "Deliver to Production NuGet - ${{ inputs.tag }}"
+run-name: "Deliver to Production NuGet - ${{ inputs.buildVersion }}"
 
 concurrency:
-  group: ${{ github.workflow }}-tag-${{ inputs.tag }}
+  group: ${{ github.workflow }}-build-${{ inputs.buildVersion }}
   cancel-in-progress: false
 
 on:
@@ -11,12 +11,6 @@ on:
         description: Build version to deliver to Production (default is latest)
         required: false
         default: 'latest'
-      tag:
-        description: Production release tag (semantic version, e.g. 1.2.0)
-        required: true
-      name:
-        description: Name of this Production release
-        required: true
 
 permissions:
   actions: read
@@ -47,6 +41,34 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read version from app.json (and record current commit)
+        id: appversion
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -Path "app.json")) {
+            throw "app.json not found at repository root."
+          }
+
+          $appJson = Get-Content -Path "app.json" -Raw | ConvertFrom-Json
+          if (-not $appJson.version) {
+            throw "app.json does not contain a 'version' property."
+          }
+
+          $tag = [string]$appJson.version
+          if ($tag -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Version '$tag' is not in expected format Major.Minor.Build.Revision (e.g. 27.0.1.0)."
+          }
+
+          # Commit sha of the checked-out code (what app.json came from)
+          $repoSha = (git rev-parse HEAD).Trim()
+
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPO_SHA=$repoSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "Using TAG=$tag"
+          Write-Host "Repo SHA: $repoSha"
 
       - name: Initialize the workflow
         id: init
@@ -84,13 +106,48 @@ jobs:
           TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
 
+      - name: Safety check - build artifacts must match current main/app.json commit
+        id: safetycheck
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repoSha     = "${{ env.REPO_SHA }}".Trim()
+          $commitishIn = "${{ steps.determineArtifactsForRelease.outputs.commitish }}".Trim()
+
+          if ([string]::IsNullOrWhiteSpace($commitishIn)) {
+            throw "DetermineArtifactsForRelease did not output commitish."
+          }
+
+          # commitish might be a branch name, short sha, or full sha.
+          # Normalize both sides to full 40-char sha using git.
+          $repoFull = (git rev-parse $repoSha).Trim()
+          $artFull  = (git rev-parse $commitishIn).Trim()
+
+          Write-Host "Repo full SHA:      $repoFull"
+          Write-Host "Artifacts commitish: $commitishIn"
+          Write-Host "Artifacts full SHA:  $artFull"
+
+          if ($repoFull -ne $artFull) {
+            throw @"
+            Safety check failed: selected buildVersion '${{ github.event.inputs.buildVersion }}' points to a different commit than the checked-out repository.
+            
+            - app.json came from: $repoFull
+            - build artifacts are from: $artFull
+            
+            This prevents accidentally releasing an older (or different) build.
+            Pick the correct buildVersion (or rebuild) and try again.
+            "@
+          }
+
+          Write-Host "✅ Safety check passed: artifacts match app.json commit."
+
       - name: Prepare release notes
         id: createreleasenotes
         uses: microsoft/AL-Go-Actions/CreateReleaseNotes@v8.3
         with:
           shell: powershell
           buildVersion: ${{ github.event.inputs.buildVersion }}
-          tag_name: ${{ github.event.inputs.tag }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
 
       - name: Create Production GitHub release
@@ -98,8 +155,8 @@ jobs:
         id: createrelease
         env:
           bodyMD: ${{ steps.createreleasenotes.outputs.releaseNotes }}
-          tag_name: ${{ github.event.inputs.tag }}
-          name: ${{ github.event.inputs.name }}
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.RELEASE_NAME }}
           commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
         with:
           github-token: ${{ steps.ReadSecrets.outputs.TokenForPush }}
@@ -110,7 +167,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: process.env.tag_name,
               name: process.env.name,
-              body: bodyMD.replaceAll('\n','\n').replaceAll('%0A','\n').replaceAll('%0D','\n').replaceAll('%25','%'),
+              body: bodyMD.replaceAll('\\n','\n').replaceAll('%0A','\n').replaceAll('%0D','\n').replaceAll('%25','%'),
               draft: false,
               prerelease: false,
               make_latest: true,
