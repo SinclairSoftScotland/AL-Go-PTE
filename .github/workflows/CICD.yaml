@@ -3,7 +3,7 @@ name: ' CI/CD'
 on:
   workflow_dispatch:
   push:
-    branches: [ 'main', 'release/*' ]
+    branches: [ 'main', 'release/*', 'feature/*' ]
     paths:
       - 'app.json'
 
