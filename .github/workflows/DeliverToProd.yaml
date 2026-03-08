@@ -1,4 +1,6 @@
-run-name: "Deliver to Production NuGet - ${{ inputs.buildVersion }}"
+name: Release to UAT NuGet
+
+run-name: "Release to UAT - ${{ inputs.buildVersion }}"
 
 concurrency:
   group: ${{ github.workflow }}-build-${{ inputs.buildVersion }}
@@ -8,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       buildVersion:
-        description: Build version to deliver to Production (default is latest)
+        description: Build version to promote to UAT (default is latest)
         required: false
         default: 'latest'
 
@@ -27,7 +29,7 @@ env:
   ALGoRepoSettings: ${{ vars.ALGoRepoSettings }}
 
 jobs:
-  CreateProdRelease:
+  ReleaseToUAT:
     runs-on: [ windows-latest ]
     outputs:
       artifacts: ${{ steps.determineArtifactsForRelease.outputs.artifacts }}
@@ -42,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Read version from app.json (and record current commit)
+      - name: Read version from app.json (derive SemVer tag) and record current commit
         id: appversion
         run: |
           $ErrorActionPreference = 'Stop'
@@ -51,23 +53,29 @@ jobs:
           }
 
           $appJson = Get-Content -Path "app.json" -Raw | ConvertFrom-Json
-          if (-not $appJson.version) {
+          $appVersion = [string]$appJson.version
+          if (-not $appVersion) {
             throw "app.json does not contain a 'version' property."
           }
 
-          $tag = [string]$appJson.version
-          if ($tag -notmatch '^\d+\.\d+\.\d+\.\d+$') {
-            throw "Version '$tag' is not in expected format Major.Minor.Build.Revision (e.g. 27.0.1.0)."
+          # Expect BC style: Major.Minor.Build.Revision (e.g. 27.0.119.0)
+          if ($appVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Version '$appVersion' is not in expected BC format Major.Minor.Build.Revision (e.g. 27.0.119.0)."
           }
 
-          # Commit sha of the checked-out code (what app.json came from)
+          $parts = $appVersion.Split('.')
+          $semverBase = "$($parts[0]).$($parts[1]).$($parts[2])"  # 27.0.119
+          $tag = "$semverBase-uat"                                # 27.0.119-uat (SemVer prerelease)
+
           $repoSha = (git rev-parse HEAD).Trim()
 
+          "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "RELEASE_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "REPO_SHA=$repoSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          Write-Host "Using TAG=$tag"
+          Write-Host "APP_VERSION=$appVersion"
+          Write-Host "TAG=$tag"
           Write-Host "Repo SHA: $repoSha"
 
       - name: Initialize the workflow
@@ -87,8 +95,8 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          # NuGetProdContext is mapped to nuGetContext so AL-Go Deliver action picks it up
-          getSecrets: 'TokenForPush,NuGetProdContext=nuGetContext'
+          # NuGetUATContext is mapped to nuGetContext so AL-Go Deliver action picks it up
+          getSecrets: 'TokenForPush,NuGetUATContext=nuGetContext'
 
       - name: Determine Projects
         id: determineProjects
@@ -106,7 +114,7 @@ jobs:
           TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
 
-      - name: Safety check - build artifacts must match current main/app.json commit
+      - name: Safety check - build artifacts must match current commit (app.json)
         id: safetycheck
         run: |
           $ErrorActionPreference = 'Stop'
@@ -118,25 +126,24 @@ jobs:
             throw "DetermineArtifactsForRelease did not output commitish."
           }
 
-          # commitish might be a branch name, short sha, or full sha.
-          # Normalize both sides to full 40-char sha using git.
           $repoFull = (git rev-parse $repoSha).Trim()
           $artFull  = (git rev-parse $commitishIn).Trim()
 
-          Write-Host "Repo full SHA:      $repoFull"
-          Write-Host "Artifacts commitish: $commitishIn"
-          Write-Host "Artifacts full SHA:  $artFull"
+          Write-Host "Repo full SHA:        $repoFull"
+          Write-Host "Artifacts commitish:  $commitishIn"
+          Write-Host "Artifacts full SHA:   $artFull"
 
           if ($repoFull -ne $artFull) {
-            throw @"
-            Safety check failed: selected buildVersion '${{ github.event.inputs.buildVersion }}' points to a different commit than the checked-out repository.
-            
-            - app.json came from: $repoFull
-            - build artifacts are from: $artFull
-            
-            This prevents accidentally releasing an older (or different) build.
-            Pick the correct buildVersion (or rebuild) and try again.
-            "@
+            $msg = @(
+              "Safety check failed: selected buildVersion '${{ inputs.buildVersion }}' points to a different commit than the checked-out repository."
+              ""
+              "- app.json came from: $repoFull"
+              "- build artifacts are from: $artFull"
+              ""
+              "This prevents accidentally releasing an older (or different) build."
+              "Pick the correct buildVersion (or rebuild) and try again."
+            ) -join "`n"
+            throw $msg
           }
 
           Write-Host "✅ Safety check passed: artifacts match app.json commit."
@@ -150,7 +157,7 @@ jobs:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
 
-      - name: Create Production GitHub release
+      - name: Create UAT GitHub prerelease
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         id: createrelease
         env:
@@ -169,19 +176,18 @@ jobs:
               name: process.env.name,
               body: bodyMD.replaceAll('\\n','\n').replaceAll('%0A','\n').replaceAll('%0D','\n').replaceAll('%25','%'),
               draft: false,
-              prerelease: false,
-              make_latest: true,
+              prerelease: true,
               target_commitish: process.env.commitish
             });
             const { data: { id: releaseId } } = createReleaseResponse;
             core.setOutput('releaseId', releaseId);
 
-  DeliverToProdNuGet:
-    needs: [ CreateProdRelease ]
+  DeliverToUATNuGet:
+    needs: [ ReleaseToUAT ]
     runs-on: [ windows-latest ]
-    name: Deliver ${{ matrix.name }} to Production NuGet
+    name: Deliver ${{ matrix.name }} to UAT NuGet
     strategy:
-      matrix: ${{ fromJson(needs.CreateProdRelease.outputs.artifacts) }}
+      matrix: ${{ fromJson(needs.ReleaseToUAT.outputs.artifacts) }}
       fail-fast: true
     steps:
       - name: Checkout
@@ -198,7 +204,7 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          getSecrets: 'TokenForPush,NuGetProdContext=nuGetContext'
+          getSecrets: 'TokenForPush,NuGetUATContext'
 
       - name: Download artifact
         env:
@@ -215,9 +221,9 @@ jobs:
           }
           Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $ENV:MATRIX_URL -OutFile "$($ENV:MATRIX_NAME).zip"
 
-      - name: Deliver to Production NuGet feed
+      - name: Deliver to UAT NuGet feed
         uses: microsoft/AL-Go-Actions/Deliver@v8.3
-        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).nuGetContext != '' }}
+        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).NuGetUATContext != '' }}
         env:
           Secrets: ${{ steps.ReadSecrets.outputs.Secrets }}
         with:
@@ -229,7 +235,7 @@ jobs:
           atypes: 'Apps,TestApps'
 
   PostProcess:
-    needs: [ CreateProdRelease, DeliverToProdNuGet ]
+    needs: [ ReleaseToUAT, DeliverToUATNuGet ]
     if: always()
     runs-on: [ windows-latest ]
     steps:
@@ -242,5 +248,5 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           shell: powershell
-          telemetryScopeJson: ${{ needs.CreateProdRelease.outputs.telemetryScopeJson }}
+          telemetryScopeJson: ${{ needs.ReleaseToUAT.outputs.telemetryScopeJson }}
           currentJobContext: ${{ toJson(job) }}
