@@ -1,7 +1,8 @@
-run-name: "Release to UAT - ${{ inputs.tag }}"
+run-name: "Release to UAT - ${{ inputs.buildVersion }}"
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-build-${{ inputs.buildVersion }}
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -10,14 +11,6 @@ on:
         description: Build version to promote to UAT (default is latest)
         required: false
         default: 'latest'
-      tag:
-        description: UAT release tag (semantic version pre-release, e.g. 1.2.0-rc.1)
-        required: true
-        default: ''
-      name:
-        description: Name of this UAT release
-        required: true
-        default: ''
 
 permissions:
   actions: read
@@ -48,6 +41,34 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read version from app.json (and record current commit)
+        id: appversion
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -Path "app.json")) {
+            throw "app.json not found at repository root."
+          }
+
+          $appJson = Get-Content -Path "app.json" -Raw | ConvertFrom-Json
+          if (-not $appJson.version) {
+            throw "app.json does not contain a 'version' property."
+          }
+
+          $version = [string]$appJson.version
+          if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Version '$version' is not in expected format Major.Minor.Build.Revision (e.g. 27.0.1.0)."
+          }
+
+          $tag = "$version-uat"
+          $repoSha = (git rev-parse HEAD).Trim()
+
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPO_SHA=$repoSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "Using TAG=$tag"
+          Write-Host "Repo SHA: $repoSha"
 
       - name: Initialize the workflow
         id: init
@@ -85,13 +106,46 @@ jobs:
           TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
 
+      - name: Safety check - build artifacts must match current main/app.json commit
+        id: safetycheck
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repoSha     = "${{ env.REPO_SHA }}".Trim()
+          $commitishIn = "${{ steps.determineArtifactsForRelease.outputs.commitish }}".Trim()
+
+          if ([string]::IsNullOrWhiteSpace($commitishIn)) {
+            throw "DetermineArtifactsForRelease did not output commitish."
+          }
+
+          $repoFull = (git rev-parse $repoSha).Trim()
+          $artFull  = (git rev-parse $commitishIn).Trim()
+
+          Write-Host "Repo full SHA:       $repoFull"
+          Write-Host "Artifacts commitish: $commitishIn"
+          Write-Host "Artifacts full SHA:  $artFull"
+
+          if ($repoFull -ne $artFull) {
+            throw @"
+            Safety check failed: selected buildVersion '${{ github.event.inputs.buildVersion }}' points to a different commit than the checked-out repository.
+            
+            - app.json came from: $repoFull
+            - build artifacts are from: $artFull
+            
+            This prevents accidentally releasing an older (or different) build.
+            Pick the correct buildVersion (or rebuild) and try again.
+            "@
+          }
+
+          Write-Host "✅ Safety check passed: artifacts match app.json commit."
+
       - name: Prepare release notes
         id: createreleasenotes
         uses: microsoft/AL-Go-Actions/CreateReleaseNotes@v8.3
         with:
           shell: powershell
           buildVersion: ${{ github.event.inputs.buildVersion }}
-          tag_name: ${{ github.event.inputs.tag }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
 
       - name: Create UAT GitHub prerelease
@@ -99,8 +153,8 @@ jobs:
         id: createrelease
         env:
           bodyMD: ${{ steps.createreleasenotes.outputs.releaseNotes }}
-          tag_name: ${{ github.event.inputs.tag }}
-          name: ${{ github.event.inputs.name }}
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.RELEASE_NAME }}
           commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
         with:
           github-token: ${{ steps.ReadSecrets.outputs.TokenForPush }}
@@ -114,7 +168,7 @@ jobs:
               body: bodyMD.replaceAll('\\n','\n').replaceAll('%0A','\n').replaceAll('%0D','\n').replaceAll('%25','%'),
               draft: false,
               prerelease: true,
-              make_latest: 'false',
+              make_latest: false,
               target_commitish: process.env.commitish
             });
             const { data: { id: releaseId } } = createReleaseResponse;
@@ -163,7 +217,7 @@ jobs:
         uses: microsoft/AL-Go-Actions/Deliver@v8.3
         if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).nuGetContext != '' }}
         env:
-          Secrets: '${{ steps.ReadSecrets.outputs.Secrets }}'
+          Secrets: ${{ steps.ReadSecrets.outputs.Secrets }}
         with:
           shell: powershell
           type: 'Release'
@@ -188,4 +242,3 @@ jobs:
           shell: powershell
           telemetryScopeJson: ${{ needs.ReleaseToUAT.outputs.telemetryScopeJson }}
           currentJobContext: ${{ toJson(job) }}
-          
