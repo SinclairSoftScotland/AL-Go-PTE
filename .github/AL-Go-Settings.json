@@ -2,5 +2,5 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v8.3/.Modules/settings.schema.json",
   "type": "PTE",
   "templateUrl": "https://github.com/SinclairSoftScotland/AL-Go-PTE@main",
-  "templateSha": "5252bb27a2fed05fccb48a35dfb52cfa3355e2e5"
+  "templateSha": "59914dc6f2c733c16a2129b9d48635f4f54a8b6c"
 }
