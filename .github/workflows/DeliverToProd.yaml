@@ -14,11 +14,9 @@ on:
       tag:
         description: Production release tag (semantic version, e.g. 1.2.0)
         required: true
-        default: ''
       name:
         description: Name of this Production release
         required: true
-        default: ''
 
 permissions:
   actions: read
