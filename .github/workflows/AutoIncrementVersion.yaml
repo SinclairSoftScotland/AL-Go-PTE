@@ -1,5 +1,11 @@
 name: Auto Increment Version
 
+###
+# This workflow automatically increments the build version in app.json on every push to main.
+# It ignores changes made to files in the .github and .AL-Go directories to prevent infinite loops.
+# After updating the version, it commits the change and triggers the CICD workflow.
+###
+
 on:
   push:
     branches:
@@ -18,7 +24,7 @@ jobs:
     # skip entirely if this run was caused by our own bot commit
     if: github.actor != 'github-actions[bot]' && github.actor != 'github-actions'
 
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -28,28 +34,34 @@ jobs:
           token: ${{ secrets.ghTokenWorkflow }}
 
       - name: Increment build number in app.json
-        shell: pwsh
         run: |
-          $appJsonPath = "app.json"
-          if (-not (Test-Path $appJsonPath)) {
-            Write-Error "app.json not found"
+          if [ ! -f app.json ]; then
+            echo "app.json not found" >&2
             exit 1
-          }
-          $appJson = Get-Content $appJsonPath -Raw | ConvertFrom-Json
-          $current = [Version]$appJson.version
-          $newBuild = $current.Build + 1
-          $newVersion = "$($current.Major).$($current.Minor).$newBuild.0"
-          $appJson.version = $newVersion
-          $appJson | ConvertTo-Json -Depth 10 | Set-Content $appJsonPath -Encoding UTF8
+          fi
 
-          echo "✅ Version bumped: $($current) -> $newVersion"
-          echo "✅ NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
+          current=$(jq -r '.version' app.json)
+          major=$(echo "$current" | cut -d. -f1)
+          minor=$(echo "$current" | cut -d. -f2)
+          build=$(echo "$current" | cut -d. -f3)
+          new_build=$((build + 1))
+          new_version="${major}.${minor}.${new_build}.0"
+
+          jq --arg v "$new_version" '.version = $v' app.json > app.tmp.json && mv app.tmp.json app.json
+
+          echo "✅ Version bumped: $current -> $new_version"
+          echo "NEW_VERSION=$new_version" >> "$GITHUB_ENV"
 
       - name: Commit and push version bump
-        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app.json
           git commit -m "Increment build version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes to commit"
           git push
+
+      - name: Trigger CICD
+        if: success()
+        run: gh workflow run CICD.yaml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.ghTokenWorkflow }}
