@@ -1,10 +1,48 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v8.3/.Modules/settings.schema.json",
   "country": "gb",
+  "type": "PTE",
+  "trackALAlertsInGitHub": false,
+  "enableCodeCop": true,
+  "enableUICop": true,
+  "enablePerTenantExtensionCop": true,
+  "failOn": "warning",
+  "versioningStrategy": 3,
+  "appFolders": [
+    "."
+  ],
+  "testFolders": [],
+  "bcptTestFolders": [],
   "CICDPushBranches": [
+    "main",
+    "develop",
     "release/*"
   ],
   "CICDPullRequestBranches": [
-    "main"
-  ]
+    "main",
+    "develop",
+    "release/*"
+  ],
+  "pullRequestTrigger": "pull_request",
+  "githubRunner": "self-hosted, Windows, al-go",
+  "artifactCachePath": "C:\\bcartifacts.cache",
+  "cacheKeepDays": 30,
+  "doNotPublishApps": true,
+  "doNotRunTests": true,
+  "cacheImageName": "algo-cache",
+  "incrementalBuilds": {
+    "onPush": true,
+    "onPull_Request": true,
+    "retentionDays": 30,
+    "onSchedule": false,
+    "mode": "modifiedapps"
+  },
+  "alwaysBuildAllProjects": false,
+  "fullBuildPatterns": [],
+  "useProjectDependencies": true,
+  "useCompilerFolder": true,
+  "bcContainerHelperConfig": {
+    "artifactCachePath": "C:\\bcartifacts.cache",
+    "cacheKeepDays": 30
+  }
 }

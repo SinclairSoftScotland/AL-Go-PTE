@@ -19,7 +19,7 @@ env:
 
 jobs:
   DeployALDoc:
-    runs-on: [ self-hosted, Windows, al-go ]
+    runs-on: [ windows-latest ]
     name: Deploy Reference Documentation
     environment:
       name: github-pages
