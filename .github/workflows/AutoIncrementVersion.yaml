@@ -1,0 +1,67 @@
+name: Auto Increment Version
+
+###
+# This workflow automatically increments the build version in app.json on every push to main.
+# It ignores changes made to files in the .github and .AL-Go directories to prevent infinite loops.
+# After updating the version, it commits the change and triggers the CICD workflow.
+###
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/**'
+      - '.AL-Go/**'
+
+concurrency:
+  group: auto-version-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  increment-version:
+    name: Increment Build Version
+    # skip entirely if this run was caused by our own bot commit
+    if: github.actor != 'github-actions[bot]' && github.actor != 'github-actions'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          lfs: true
+          token: ${{ secrets.ghTokenWorkflow }}
+
+      - name: Increment build number in app.json
+        run: |
+          if [ ! -f app.json ]; then
+            echo "app.json not found" >&2
+            exit 1
+          fi
+
+          current=$(jq -r '.version' app.json)
+          major=$(echo "$current" | cut -d. -f1)
+          minor=$(echo "$current" | cut -d. -f2)
+          build=$(echo "$current" | cut -d. -f3)
+          new_build=$((build + 1))
+          new_version="${major}.${minor}.${new_build}.0"
+
+          jq --arg v "$new_version" '.version = $v' app.json > app.tmp.json && mv app.tmp.json app.json
+
+          echo "✅ Version bumped: $current -> $new_version"
+          echo "NEW_VERSION=$new_version" >> "$GITHUB_ENV"
+
+      - name: Commit and push version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app.json
+          git commit -m "Increment build version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes to commit"
+          git push
+
+      - name: Trigger CICD
+        if: success()
+        run: gh workflow run CICD.yaml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.ghTokenWorkflow }}
