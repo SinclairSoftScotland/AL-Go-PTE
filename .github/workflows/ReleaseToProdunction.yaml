@@ -386,7 +386,7 @@ jobs:
 
       - name: Deliver to Production NuGet feed
         uses: microsoft/AL-Go-Actions/Deliver@v8.3
-        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).name: Deliver to Production NuGet
+        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).name: Release to Production NuGet
 
 run-name: "Deliver to Production NuGet - ${{ inputs.buildVersion }} (${{
   inputs.versionSource }})"
