@@ -95,8 +95,8 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          # NuGetUATContext is mapped to nuGetContext so AL-Go Deliver action picks it up
-          getSecrets: 'TokenForPush,NuGetUATContext=nuGetUATContext'
+          # NuGetUATContext is mapped to NUGETUATCONTEXT so AL-Go Deliver action picks it up
+          getSecrets: 'TokenForPush,NuGetUATContext=NUGETUATCONTEXT'
 
       - name: Determine Projects
         id: determineProjects
@@ -204,7 +204,7 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          getSecrets: 'TokenForPush,NuGetUATContext=nuGetContext'
+          getSecrets: 'TokenForPush,NuGetUATContext=NUGETUATCONTEXT'
 
       - name: Download artifact
         env:
@@ -223,7 +223,7 @@ jobs:
 
       - name: Deliver to UAT NuGet feed
         uses: microsoft/AL-Go-Actions/Deliver@v8.3
-        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).nuGetContext != '' }}
+        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).NUGETUATCONTEXT != '' }}
         env:
           Secrets: ${{ steps.ReadSecrets.outputs.Secrets }}
         with:
