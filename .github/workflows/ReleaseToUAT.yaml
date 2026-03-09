@@ -30,7 +30,7 @@ env:
 
 jobs:
   ReleaseToUAT:
-    runs-on: [ windows-latest ]
+    runs-on: [ al-go ]
     outputs:
       artifacts: ${{ steps.determineArtifactsForRelease.outputs.artifacts }}
       releaseId: ${{ steps.createrelease.outputs.releaseId }}
@@ -184,7 +184,7 @@ jobs:
 
   DeliverToUATNuGet:
     needs: [ ReleaseToUAT ]
-    runs-on: [ windows-latest ]
+    runs-on: [ al-go ]
     name: Deliver ${{ matrix.name }} to UAT NuGet
     strategy:
       matrix: ${{ fromJson(needs.ReleaseToUAT.outputs.artifacts) }}
@@ -237,7 +237,7 @@ jobs:
   PostProcess:
     needs: [ ReleaseToUAT, DeliverToUATNuGet ]
     if: always()
-    runs-on: [ windows-latest ]
+    runs-on: [ al-go ]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
