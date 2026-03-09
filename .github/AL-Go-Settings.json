@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v8.3/.Modules/settings.schema.json",
   "type": "PTE",
   "templateUrl": "https://github.com/SinclairSoftScotland/AL-Go-PTE@main",
-  "templateSha": "f43edfcba499a5017faac6ba6f6a063129a7d7c4",
+  "templateSha": "da656a7c449dc89621610f7a1d5e78076c126ccf",
   "githubRunner": "self-hosted, Windows, al-go",
   "runs-on": "self-hosted, Windows, al-go",
   "checkForUpdates": false
