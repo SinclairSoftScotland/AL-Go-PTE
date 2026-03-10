@@ -43,6 +43,7 @@ jobs:
       artifacts: ${{ steps.determineArtifactsForRelease.outputs.artifacts }}
       releaseId: ${{ steps.createrelease.outputs.releaseId }}
       telemetryScopeJson: ${{ steps.init.outputs.telemetryScopeJson }}
+      resolvedBuildVersion: ${{ steps.version.outputs.resolvedBuildVersion }}
     steps:
       - name: Dump Workflow Information
         uses: microsoft/AL-Go-Actions/DumpWorkflowInfo@v8.3
@@ -61,22 +62,21 @@ jobs:
           git fetch --force --tags --prune origin
 
           $source = "${{ inputs.versionSource }}".Trim()
+          $ghHeaders = @{
+            "Authorization" = "token ${{ github.token }}"
+            "Accept"        = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
 
           if ($source -eq "main") {
             $ref = "origin/main"
           }
           elseif ($source -eq "latest-uat") {
-            $headers = @{
-              "Authorization" = "token ${{ github.token }}"
-              "Accept"        = "application/vnd.github+json"
-              "X-GitHub-Api-Version" = "2022-11-28"
-            }
-
             # releases/latest only returns non-prerelease releases.
             # UAT releases are marked prerelease:true, so we list releases and
             # find the most recent one tagged *-uat instead.
             $url = "https://api.github.com/repos/${{ github.repository }}/releases?per_page=20"
-            $releases = Invoke-RestMethod -Headers $headers -Uri $url -Method Get
+            $releases = Invoke-RestMethod -Headers $ghHeaders -Uri $url -Method Get
             $latestUat = $releases | Where-Object { $_.prerelease -eq $true -and $_.tag_name -like '*-uat' } | Select-Object -First 1
 
             if (-not $latestUat) {
@@ -112,11 +112,35 @@ jobs:
 
           $refSha = (git rev-parse $ref).Trim()
 
+          # Auto-discover the CI/CD run number for this exact commit.
+          # With versioningStrategy 3, the artifact is versioned as Major.Minor.Build.RunNumber.
+          # Passing this exact version to DetermineArtifactsForRelease ensures we promote
+          # the same build that was tested in UAT, not just the latest CI artifact.
+          $runsUrl = "https://api.github.com/repos/${{ github.repository }}/actions/runs?head_sha=$refSha&event=push&status=success&per_page=20"
+          $runsResp = Invoke-RestMethod -Headers $ghHeaders -Uri $runsUrl -Method Get
+
+          $ciRun = $runsResp.workflow_runs |
+            Where-Object { $_.path -like '*CICD*' -or $_.name -like '*CI/CD*' } |
+            Select-Object -First 1
+
+          if (-not $ciRun) {
+            throw "Could not find a successful CI/CD workflow run for commit $refSha (ref: $ref). Ensure CI/CD completed successfully for this ref."
+          }
+
+          $resolvedBuildVersion = "$semver.$($ciRun.run_number)"
+          Write-Host "CI/CD run #$($ciRun.run_number) at commit $refSha"
+          Write-Host "Resolved build version: $resolvedBuildVersion"
+
           "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TAG=$semver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "RELEASE_NAME=$semver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VERSION_REF=$ref" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VERSION_REF_SHA=$refSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RESOLVED_BUILD_VERSION=$resolvedBuildVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # Also expose as a step output so it can be declared as a job output
+          # and consumed by the DeliverToProdNuGet job.
+          "resolvedBuildVersion=$resolvedBuildVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           Write-Host "APP_VERSION=$version"
           Write-Host "Version source ref:  $ref"
@@ -171,7 +195,7 @@ jobs:
         uses: microsoft/AL-Go-Actions/DetermineArtifactsForRelease@v8.3
         with:
           shell: powershell
-          buildVersion: ${{ github.event.inputs.buildVersion }}
+          buildVersion: ${{ env.RESOLVED_BUILD_VERSION }}
           GITHUB_TOKEN: ${{ github.token }}
           TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
@@ -212,7 +236,7 @@ jobs:
         uses: microsoft/AL-Go-Actions/CreateReleaseNotes@v8.3
         with:
           shell: powershell
-          buildVersion: ${{ github.event.inputs.buildVersion }}
+          buildVersion: ${{ env.RESOLVED_BUILD_VERSION }}
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
 
@@ -294,7 +318,7 @@ jobs:
           type: 'Release'
           projects: ${{ matrix.project }}
           deliveryTarget: 'NuGet'
-          artifacts: ${{ github.event.inputs.buildVersion }}
+          artifacts: ${{ needs.CreateProdRelease.outputs.resolvedBuildVersion }}
           atypes: 'Apps,TestApps'
 
   PostProcess:
@@ -303,4 +327,13 @@ jobs:
     runs-on: [ self-hosted, Windows, al-go ]
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Finalize the workflow
+        uses: microsoft/AL-Go-Actions/WorkflowPostProcess@v8.3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          shell: powershell
+          telemetryScopeJson: ${{ needs.CreateProdRelease.outputs.telemetryScopeJson }}
+          currentJobContext: ${{ toJson(job) }}
