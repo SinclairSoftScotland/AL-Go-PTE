@@ -19,7 +19,7 @@ on:
         type: choice
         options:
           - main
-          - latest-release
+          - latest-uat
         default: main
 
 permissions:
@@ -65,24 +65,29 @@ jobs:
           if ($source -eq "main") {
             $ref = "origin/main"
           }
-          elseif ($source -eq "latest-release") {
+          elseif ($source -eq "latest-uat") {
             $headers = @{
               "Authorization" = "token ${{ github.token }}"
               "Accept"        = "application/vnd.github+json"
               "X-GitHub-Api-Version" = "2022-11-28"
             }
 
-            $url = "https://api.github.com/repos/${{ github.repository }}/releases/latest"
-            $resp = Invoke-RestMethod -Headers $headers -Uri $url -Method Get
-            if (-not $resp.tag_name) {
-              throw "No latest GitHub release tag found (releases/latest returned no tag_name)."
+            # releases/latest only returns non-prerelease releases.
+            # UAT releases are marked prerelease:true, so we list releases and
+            # find the most recent one tagged *-uat instead.
+            $url = "https://api.github.com/repos/${{ github.repository }}/releases?per_page=20"
+            $releases = Invoke-RestMethod -Headers $headers -Uri $url -Method Get
+            $latestUat = $releases | Where-Object { $_.prerelease -eq $true -and $_.tag_name -like '*-uat' } | Select-Object -First 1
+
+            if (-not $latestUat) {
+              throw "No UAT prerelease found (looked for releases tagged '*-uat'). Run 'Release to UAT NuGet' first."
             }
 
-            $ref = "refs/tags/$($resp.tag_name)"
-            Write-Host "Latest GitHub release tag: $($resp.tag_name)"
+            $ref = "refs/tags/$($latestUat.tag_name)"
+            Write-Host "Latest UAT release tag: $($latestUat.tag_name)"
           }
           else {
-            throw "Unknown versionSource '$source'."
+            throw "Unknown versionSource '$source'. Valid values: main, latest-uat"
           }
 
           # Read app.json from the chosen ref WITHOUT checking it out
