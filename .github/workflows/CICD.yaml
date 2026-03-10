@@ -5,7 +5,7 @@ on:
   push:
     paths:
       - 'app.json'
-    branches: [ 'release/*' ]
+    branches: [ 'main', 'release/*', 'feature/*' ]
 
 defaults:
   run:
