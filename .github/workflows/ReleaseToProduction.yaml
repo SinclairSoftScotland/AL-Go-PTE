@@ -152,7 +152,9 @@ jobs:
             throw "NuGet Prod context is missing. Ensure secret 'NUGETPRODCONTEXT' is set on this repo."
           }
 
-          $ctx = $secrets.nuGetContext | ConvertFrom-Json
+          # AL-Go ReadSecrets base64-encodes secret values inside the Secrets JSON
+          $ctxJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($secrets.nuGetContext))
+          $ctx = $ctxJson | ConvertFrom-Json
           if (-not $ctx.serverUrl) { throw "NuGet Prod context has no serverUrl. Check 'NUGETPRODCONTEXT' secret JSON." }
           if (-not $ctx.token) { throw "NuGet Prod context has no token. Check 'NUGETPRODCONTEXT' secret JSON." }
 
@@ -274,7 +276,9 @@ jobs:
             throw "NuGet Prod context is missing. Ensure secret 'NUGETPRODCONTEXT' is set on this repo."
           }
 
-          $ctx = $secrets.nuGetContext | ConvertFrom-Json
+          # AL-Go ReadSecrets base64-encodes secret values inside the Secrets JSON
+          $ctxJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($secrets.nuGetContext))
+          $ctx = $ctxJson | ConvertFrom-Json
           if (-not $ctx.serverUrl) { throw "NuGet Prod context has no serverUrl. Check 'NUGETPRODCONTEXT' secret JSON." }
           if (-not $ctx.token) { throw "NuGet Prod context has no token. Check 'NUGETPRODCONTEXT' secret JSON." }
 
@@ -299,13 +303,4 @@ jobs:
     runs-on: [ self-hosted, Windows, al-go ]
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Finalize the workflow
-        uses: microsoft/AL-Go-Actions/WorkflowPostProcess@v8.3
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          shell: powershell
-          telemetryScopeJson: ${{ needs.CreateProdRelease.outputs.telemetryScopeJson }}
-          currentJobContext: ${{ toJson(job) }}
+        uses: actions/checkout@de0fac2
