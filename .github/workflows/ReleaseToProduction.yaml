@@ -103,7 +103,7 @@ jobs:
           # AL-Go CreateReleaseNotes expects SemVer (3 numeric segments). Your app.json is BC-style (4 segments).
           # For production git tags + release notes, we will use SemVer base (Major.Minor.Build).
           $parts = $version.Split('.')
-          $semver = "$($parts[0]).$($parts[1]).$($parts[2])"  # 27.0.119
+          $semver = "$($parts[0]).$($parts[1]).$($parts[2])"  # e.g. 27.0.3
 
           $refSha = (git rev-parse $ref).Trim()
 
@@ -135,8 +135,8 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          # NUGETPRODCONTEXT is mapped to nuGetContext so AL-Go Deliver action picks it up
-          getSecrets: 'TokenForPush,NUGETPRODCONTEXT=nuGetContext'
+          # Format: outputKey=SecretName — reads NUGETPRODCONTEXT secret, exposes as nuGetContext
+          getSecrets: 'TokenForPush,nuGetContext=NUGETPRODCONTEXT'
 
       - name: Validate Production NuGet feed context is configured
         run: |
@@ -257,7 +257,8 @@ jobs:
         with:
           shell: powershell
           gitHubSecrets: ${{ toJson(secrets) }}
-          getSecrets: 'TokenForPush,NUGETPRODCONTEXT=nuGetContext'
+          # Format: outputKey=SecretName — reads NUGETPRODCONTEXT secret, exposes as nuGetContext
+          getSecrets: 'TokenForPush,nuGetContext=NUGETPRODCONTEXT'
 
       - name: Validate Production NuGet feed context is configured
         run: |
@@ -274,23 +275,9 @@ jobs:
 
           Write-Host "✅ Prod feed configured: $($ctx.serverUrl)"
 
-      - name: Download artifact
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          MATRIX_NAME: ${{ matrix.name }}
-          MATRIX_URL: ${{ matrix.url }}
-        run: |
-          $errorActionPreference = "Stop"; $ProgressPreference = "SilentlyContinue"; Set-StrictMode -Version 2.0
-          Write-Host "Downloading artifact $ENV:MATRIX_NAME"
-          $headers = @{
-            "Authorization" = "token $ENV:GITHUB_TOKEN"
-            "X-GitHub-Api-Version" = "2022-11-28"
-            "Accept" = "application/vnd.github+json"
-          }
-          Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $ENV:MATRIX_URL -OutFile "$($ENV:MATRIX_NAME).zip"
-
       - name: Deliver to Production NuGet feed
         uses: microsoft/AL-Go-Actions/Deliver@v8.3
+        if: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).nuGetContext != '' }}
         env:
           Secrets: ${{ steps.ReadSecrets.outputs.Secrets }}
         with:
