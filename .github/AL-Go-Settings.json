@@ -4,5 +4,6 @@
   "templateUrl": "https://github.com/SinclairSoftScotland/AL-Go-PTE@main",
   "githubRunner": "self-hosted, Windows, al-go",
   "runs-on": "self-hosted, Windows, al-go",
-  "checkForUpdates": false
+  "checkForUpdates": false,
+  "templateSha": "fba3761eafdd757fbfd2e5e41b9feba3a09ad617"
 }
