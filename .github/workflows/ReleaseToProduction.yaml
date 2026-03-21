@@ -1,26 +1,18 @@
 name: Release to Production NuGet
 
-run-name: "Release to Production NuGet - ${{ inputs.buildVersion }} (${{ inputs.versionSource }})"
+run-name: "Release to Production NuGet - ${{ inputs.buildVersion }}"
 
 concurrency:
-  group: ${{ github.workflow }}-build-${{ inputs.buildVersion }}-src-${{ inputs.versionSource }}
+  group: ${{ github.workflow }}-build-${{ inputs.buildVersion }}
   cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
       buildVersion:
-        description: Build version to deliver to Production (default is latest)
+        description: Build version to deliver to Production (default is latest UAT build)
         required: false
         default: 'latest'
-      versionSource:
-        description: Where to read app.json version from (controls tag/release version)
-        required: true
-        type: choice
-        options:
-          - main
-          - latest-uat
-        default: main
 
 permissions:
   actions: read
@@ -30,7 +22,7 @@ permissions:
 
 defaults:
   run:
-    shell: powershell
+    shell: pwsh
 
 env:
   ALGoOrgSettings: ${{ vars.ALGoOrgSettings }}
@@ -40,7 +32,6 @@ jobs:
   CreateProdRelease:
     runs-on: [ self-hosted, Windows, al-go ]
     outputs:
-      artifacts: ${{ steps.determineArtifactsForRelease.outputs.artifacts }}
       releaseId: ${{ steps.createrelease.outputs.releaseId }}
       telemetryScopeJson: ${{ steps.init.outputs.telemetryScopeJson }}
       resolvedBuildVersion: ${{ steps.version.outputs.resolvedBuildVersion }}
@@ -61,34 +52,25 @@ jobs:
           # Ensure tags/refs exist locally
           git fetch --force --tags --prune origin
 
-          $source = "${{ inputs.versionSource }}".Trim()
           $ghHeaders = @{
             "Authorization" = "token ${{ github.token }}"
             "Accept"        = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
 
-          if ($source -eq "main") {
-            $ref = "origin/main"
-          }
-          elseif ($source -eq "latest-uat") {
-            # releases/latest only returns non-prerelease releases.
-            # UAT releases are marked prerelease:true, so we list releases and
-            # find the most recent one tagged *-uat instead.
-            $url = "https://api.github.com/repos/${{ github.repository }}/releases?per_page=20"
-            $releases = Invoke-RestMethod -Headers $ghHeaders -Uri $url -Method Get
-            $latestUat = $releases | Where-Object { $_.prerelease -eq $true -and $_.tag_name -like '*-uat' } | Select-Object -First 1
+          # Production releases always promote from the latest UAT release.
+          # releases/latest only returns non-prerelease releases; UAT releases are
+          # prerelease:true, so list releases and find the most recent *-uat tag.
+          $url = "https://api.github.com/repos/${{ github.repository }}/releases?per_page=20"
+          $releases = Invoke-RestMethod -Headers $ghHeaders -Uri $url -Method Get
+          $latestUat = $releases | Where-Object { $_.prerelease -eq $true -and $_.tag_name -like '*-uat' } | Select-Object -First 1
 
-            if (-not $latestUat) {
-              throw "No UAT prerelease found (looked for releases tagged '*-uat'). Run 'Release to UAT NuGet' first."
-            }
+          if (-not $latestUat) {
+            throw "No UAT prerelease found (looked for releases tagged '*-uat'). Run 'Release to UAT NuGet' first."
+          }
 
-            $ref = "refs/tags/$($latestUat.tag_name)"
-            Write-Host "Latest UAT release tag: $($latestUat.tag_name)"
-          }
-          else {
-            throw "Unknown versionSource '$source'. Valid values: main, latest-uat"
-          }
+          $ref = "refs/tags/$($latestUat.tag_name)"
+          Write-Host "Promoting UAT release: $($latestUat.tag_name)"
 
           # Read app.json from the chosen ref WITHOUT checking it out
           $appJsonRaw = git show "$ref`:app.json"
@@ -112,24 +94,52 @@ jobs:
 
           $refSha = (git rev-parse $ref).Trim()
 
-          # Auto-discover the CI/CD run number for this exact commit.
-          # With versioningStrategy 3, the artifact is versioned as Major.Minor.Build.RunNumber.
-          # Passing this exact version to DetermineArtifactsForRelease ensures we promote
-          # the same build that was tested in UAT, not just the latest CI artifact.
-          $runsUrl = "https://api.github.com/repos/${{ github.repository }}/actions/runs?head_sha=$refSha&event=push&status=success&per_page=20"
+          # Auto-discover the build version by inspecting the actual artifacts
+          # produced by the CI/CD run at this commit. This is more reliable than
+          # constructing the version from run_number, because the artifact name
+          # is the ground truth (it includes branch name, offsets, etc.).
+          $runsUrl = "https://api.github.com/repos/${{ github.repository }}/actions/runs?head_sha=$refSha&per_page=20"
           $runsResp = Invoke-RestMethod -Headers $ghHeaders -Uri $runsUrl -Method Get
 
+          Write-Host "All runs at commit $refSha :"
+          $runsResp.workflow_runs | ForEach-Object {
+            Write-Host "  run#$($_.run_number)  id=$($_.id)  event='$($_.event)'  status='$($_.status)'  conclusion='$($_.conclusion)'  name='$($_.name)'  path='$($_.path)'"
+          }
+
+          # Prefer the CICD workflow with a successful conclusion; fall back to any successful run.
           $ciRun = $runsResp.workflow_runs |
-            Where-Object { $_.path -like '*CICD*' -or $_.name -like '*CI/CD*' } |
+            Where-Object { $_.conclusion -eq 'success' -and ($_.path -like '*CICD*' -or $_.name -like '*CI/CD*') } |
             Select-Object -First 1
 
           if (-not $ciRun) {
-            throw "Could not find a successful CI/CD workflow run for commit $refSha (ref: $ref). Ensure CI/CD completed successfully for this ref."
+            $ciRun = $runsResp.workflow_runs |
+              Where-Object { $_.conclusion -eq 'success' } |
+              Select-Object -First 1
+            if ($ciRun) {
+              Write-Host "⚠️ CICD workflow not matched by name — using first successful run: '$($ciRun.name)' ($($ciRun.path))"
+            }
           }
 
-          $resolvedBuildVersion = "$semver.$($ciRun.run_number)"
-          Write-Host "CI/CD run #$($ciRun.run_number) at commit $refSha"
-          Write-Host "Resolved build version: $resolvedBuildVersion"
+          if (-not $ciRun) {
+            throw "Could not find any successful workflow run for commit $refSha (ref: $ref). Ensure CI/CD completed successfully for this ref."
+          }
+
+          # Query the artifacts produced by that specific CI/CD run and extract
+          # the version from the Apps artifact name (e.g. test10-main-Apps-27.0.5.15).
+          $runArtifactsUrl = "https://api.github.com/repos/${{ github.repository }}/actions/runs/$($ciRun.id)/artifacts?per_page=30"
+          $runArtifacts = Invoke-RestMethod -Headers $ghHeaders -Uri $runArtifactsUrl -Method Get
+
+          Write-Host "Artifacts from CI/CD run $($ciRun.id) :"
+          $runArtifacts.artifacts | ForEach-Object { Write-Host "  $($_.name)" }
+
+          $appsArtifact = $runArtifacts.artifacts | Where-Object { $_.name -like '*-Apps-*' } | Select-Object -First 1
+          if (-not $appsArtifact) {
+            throw "No Apps artifact found in CI/CD run $($ciRun.id). Artifacts may have expired (shortLivedArtifactsRetentionDays=$($settings.shortLivedArtifactsRetentionDays)). Re-run CI/CD and try again."
+          }
+
+          # Extract the version suffix from the artifact name: {repo}-{branch}-Apps-{version}
+          $resolvedBuildVersion = ($appsArtifact.name -split '-Apps-')[1]
+          Write-Host "Resolved build version from artifact '$($appsArtifact.name)': $resolvedBuildVersion"
 
           "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TAG=$semver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -190,47 +200,6 @@ jobs:
         with:
           shell: powershell
 
-      - name: Determine artifacts for release
-        id: determineArtifactsForRelease
-        uses: microsoft/AL-Go-Actions/DetermineArtifactsForRelease@v8.3
-        with:
-          shell: powershell
-          buildVersion: ${{ env.RESOLVED_BUILD_VERSION }}
-          GITHUB_TOKEN: ${{ github.token }}
-          TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
-          ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
-
-      - name: Safety check - build artifacts must match version source ref
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $versionSha  = "${{ env.VERSION_REF_SHA }}".Trim()
-          $commitishIn = "${{ steps.determineArtifactsForRelease.outputs.commitish }}".Trim()
-
-          if ([string]::IsNullOrWhiteSpace($commitishIn)) {
-            throw "DetermineArtifactsForRelease did not output commitish."
-          }
-
-          $versionFull = (git rev-parse $versionSha).Trim()
-          $artFull     = (git rev-parse $commitishIn).Trim()
-
-          Write-Host "Version source SHA:  $versionFull"
-          Write-Host "Artifacts full SHA:  $artFull"
-
-          if ($versionFull -ne $artFull) {
-            $msg = @(
-              "Safety check failed: selected buildVersion '${{ inputs.buildVersion }}' does not match versionSource '${{ inputs.versionSource }}'."
-              ""
-              "- versionSource ref SHA: $versionFull"
-              "- build artifacts SHA:   $artFull"
-              ""
-              "Pick the correct buildVersion (or rebuild) and try again."
-            ) -join "`n"
-            throw $msg
-          }
-
-          Write-Host "✅ Safety check passed."
-
       - name: Prepare release notes
         id: createreleasenotes
         uses: microsoft/AL-Go-Actions/CreateReleaseNotes@v8.3
@@ -238,7 +207,7 @@ jobs:
           shell: powershell
           buildVersion: ${{ env.RESOLVED_BUILD_VERSION }}
           tag_name: ${{ env.TAG }}
-          target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
+          target_commitish: ${{ env.VERSION_REF_SHA }}
 
       - name: Create Production GitHub release
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
@@ -247,7 +216,7 @@ jobs:
           bodyMD: ${{ steps.createreleasenotes.outputs.releaseNotes }}
           tag_name: ${{ env.TAG }}
           name: ${{ env.RELEASE_NAME }}
-          commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
+          commitish: ${{ env.VERSION_REF_SHA }}
         with:
           github-token: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           script: |
@@ -269,10 +238,7 @@ jobs:
   DeliverToProdNuGet:
     needs: [ CreateProdRelease ]
     runs-on: [ self-hosted, Windows, al-go ]
-    name: Deliver ${{ matrix.name }} to Production NuGet
-    strategy:
-      matrix: ${{ fromJson(needs.CreateProdRelease.outputs.artifacts) }}
-      fail-fast: true
+    name: Deliver to Production NuGet
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -316,7 +282,7 @@ jobs:
         with:
           shell: powershell
           type: 'Release'
-          projects: ${{ matrix.project }}
+          projects: '.'
           deliveryTarget: 'NuGet'
           artifacts: ${{ needs.CreateProdRelease.outputs.resolvedBuildVersion }}
           atypes: 'Apps,TestApps'
@@ -337,3 +303,4 @@ jobs:
           shell: powershell
           telemetryScopeJson: ${{ needs.CreateProdRelease.outputs.telemetryScopeJson }}
           currentJobContext: ${{ toJson(job) }}
+
