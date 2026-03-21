@@ -59,4 +59,3 @@ jobs:
           git add app.json
           git commit -m "Increment build version to ${{ env.NEW_VERSION }} [skip ci]" || echo "No changes to commit"
           git push
-
