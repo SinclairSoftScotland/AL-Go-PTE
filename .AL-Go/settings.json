@@ -7,5 +7,6 @@
   "shortLivedArtifactsRetentionDays": 30,
   "CICDPullRequestBranches": [
     "main"
-  ]
+  ],
+  "versioningStrategy": 0
 }

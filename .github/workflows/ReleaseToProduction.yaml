@@ -218,7 +218,7 @@ jobs:
           name: ${{ env.RELEASE_NAME }}
           commitish: ${{ env.VERSION_REF_SHA }}
         with:
-          github-token: ${{ steps.ReadSecrets.outputs.TokenForPush }}
+          github-token: ${{ secrets.ghTokenWorkflow }}
           script: |
             var bodyMD = process.env.bodyMD
             const createReleaseResponse = await github.rest.repos.createRelease({
@@ -229,7 +229,7 @@ jobs:
               body: bodyMD.replaceAll('\\n','\n').replaceAll('%0A','\n').replaceAll('%0D','\n').replaceAll('%25','%'),
               draft: false,
               prerelease: false,
-              make_latest: true,
+              make_latest: 'true',
               target_commitish: process.env.commitish
             });
             const { data: { id: releaseId } } = createReleaseResponse;
